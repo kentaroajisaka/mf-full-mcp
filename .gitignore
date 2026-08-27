@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.*
+
+# 認証トークンは ~/.mf-full-mcp/tokens.json に保存されるためリポジトリには入らないが、
+# 誤ってコピーした場合に備えて除外しておく
+tokens.json
+.mf-full-mcp/
