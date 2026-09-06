@@ -253,6 +253,68 @@ export function authStatus(): { status: string; label?: string; error?: string }
   return { status: pending.status, label: pending.label, error: pending.error };
 }
 
+/** URL全体でも `code=...&state=...`（先頭?の有無を問わない）でも受け付ける */
+export function parseCallbackParams(input: string): { code: string | null; state: string | null; error: string | null } {
+  const trimmed = input.trim();
+  let params: URLSearchParams;
+  try {
+    params = new URL(trimmed).searchParams;
+  } catch {
+    params = new URLSearchParams(trimmed.replace(/^\?/, ""));
+  }
+  return { code: params.get("code"), state: params.get("state"), error: params.get("error") };
+}
+
+/**
+ * ローカルのコールバックサーバーにブラウザが戻れない環境（Slack経由の操作・クラウド実行等）向け。
+ * ブラウザが最終的に表示したURL（接続エラー画面でよい）をそのまま渡すと認証を完了する。
+ * 実際にどこにも接続できていなくても、redirect_uri はトークン交換時に登録時の値をそのまま使うため問題ない
+ * （MF側はパラメータの一致だけを見る。ネットワーク的にそのURLへ到達できる必要はない）。
+ */
+export async function completeAuthFromCallback(input: string): Promise<{ status: "done" | "error"; label?: string; officeName?: string | null; error?: string }> {
+  const p = pending;
+  if (!p) return { status: "error", error: "進行中の認証セッションがありません。authenticate をやり直してください。" };
+  if (p.status !== "waiting") {
+    return p.status === "done"
+      ? { status: "done", label: p.label }
+      : { status: "error", label: p.label, error: p.error ?? `既に ${p.status} 状態です。authenticate をやり直してください。` };
+  }
+
+  const { code, state, error } = parseCallbackParams(input);
+  if (error) {
+    p.status = "error";
+    p.error = `認可が拒否されました: ${error}`;
+  } else if (!code || state !== p.state) {
+    p.status = "error";
+    p.error = "state 不一致または code 欠落。貼り付けたURL（またはcode/stateの文字列）を確認してください。";
+  }
+  if (p.status === "error") {
+    try {
+      p.server.close();
+    } catch {
+      /* noop */
+    }
+    return { status: "error", label: p.label, error: p.error };
+  }
+
+  p.status = "exchanging";
+  try {
+    await exchangeToken(p, code!);
+    p.status = "done";
+    return { status: "done", label: p.label };
+  } catch (e) {
+    p.status = "error";
+    p.error = String(e);
+    return { status: "error", label: p.label, error: p.error };
+  } finally {
+    try {
+      p.server.close();
+    } catch {
+      /* noop */
+    }
+  }
+}
+
 /** アクセストークンの refresh。成功時は新しい accessToken を返す。 */
 export async function refreshAccessToken(token: OfficeToken): Promise<string> {
   if (!token.refreshToken) {

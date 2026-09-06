@@ -3,7 +3,7 @@ import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { api, encodePathId } from "./rest.js";
-import { authStatus, startAuth, scopes } from "./auth.js";
+import { authStatus, startAuth, scopes, completeAuthFromCallback } from "./auth.js";
 import { listTokens, removeToken, setActive } from "./tokens.js";
 
 function text(payload: unknown) {
@@ -32,6 +32,9 @@ export function createServer(): McpServer {
 
 ## 認証
 - authenticate → 返ってきたURLをユーザーがブラウザで開いて事業者を選択・許可 → auth_status で完了確認
+- ブラウザがこのマシンのlocalhostコールバックに戻れない環境（Slack経由の操作・クラウド実行等）では、
+  ブラウザが最終的に表示したURL（接続エラー画面でよい）を auth_paste_redirect にそのまま渡す。
+  code=...&state=... のクエリ文字列だけでも受け付ける
 - トークンは事業者ごとにローカル保存され、use_office で切替できる（複数法人同時保持可）
 - 既定スコープは mfc/accounting/* 全16個（voucher.write 込み）
 - OAuthコールバックは空きポート自動割当（エフェメラル）。複数ウィンドウ/アプリで同時認証してもポート衝突しない（固定したい場合のみ MF_FULL_CALLBACK_PORT 環境変数）
@@ -49,7 +52,9 @@ export function createServer(): McpServer {
 
   server.tool(
     "authenticate",
-    "MFへのOAuth認証を開始する。返ってきたauthUrlをユーザーがブラウザで開き、事業者を選択して許可すると自動でトークンが保存される。完了確認はauth_status。",
+    "MFへのOAuth認証を開始し、完了まで待つ。認証URLと「エラー画面が出たらそのURLを貼ってください」という案内は、" +
+      "対応クライアントでは elicitation（呼び出し側のAIを介さず、クライアントが人に直接示す確認）で必ずユーザーに提示される。" +
+      "非対応クライアントでは、返り値の文章でauth_paste_redirectへの誘導を示す（呼び出し側のAIがそれをそのまま伝えること）。",
     {
       label: z.string().optional().describe("トークンの保存名（事業者を区別するラベル。省略時 default）"),
       extra_scopes: z
@@ -58,15 +63,70 @@ export function createServer(): McpServer {
         .describe("既定の会計16スコープに追加で要求するスコープ（スペース区切り。例: 'mfc/payroll/payroll.read mfc/payroll/bonus.read'）"),
     },
     async ({ label, extra_scopes }) => {
+      let r: { authUrl: string; scopes: string };
       try {
-        const r = await startAuth(label ?? "default", extra_scopes?.split(/\s+/).filter(Boolean));
-        return text({
-          authUrl: r.authUrl,
-          scopes: r.scopes,
-          next: "ユーザーにこのURLをブラウザで開いてもらい、事業者を選択して許可。その後 auth_status で完了確認。",
-        });
+        r = await startAuth(label ?? "default", extra_scopes?.split(/\s+/).filter(Boolean));
       } catch (e) {
         return errText(e);
+      }
+
+      const fallback = {
+        authUrl: r.authUrl,
+        scopes: r.scopes,
+        next:
+          "ユーザーにこのURLをブラウザで開いてもらい、事業者を選択して許可。" +
+          "その後、「このタブは閉じてOK」という画面になれば auth_status で完了確認。" +
+          "もし「接続できません」というエラー画面になったら、そのままアドレスバーのURLをコピーしてもらい、" +
+          "auth_paste_redirect にそのURLを渡して完了させる（ブラウザがこのマシンのlocalhostコールバックに戻れない環境で起きる。異常ではない）。",
+      };
+
+      // elicitationは「対応していると自己申告している」だけで実際に画面へ出すとは限らない
+      // （クライアントが黙って自動拒否することがある、2026-09-06実機確認）。
+      // なのでelicitationが拒否・失敗しても、authUrlと案内文は必ずfallbackとして返す。
+      // どちらの経路でも情報を失わないようにする（elicitationは「うまくいけば早く終わる」おまけ扱い）
+      if (!server.server.getClientCapabilities()?.elicitation?.form) {
+        return text(fallback);
+      }
+
+      try {
+        const elicited = await server.server.elicitInput({
+          mode: "form",
+          message:
+            `このURLを開いてMFにログインし、事業者を選択して許可してください。\n${r.authUrl}\n\n` +
+            `承認後「このタブは閉じてOK」という画面になれば、下の欄は空のまま送信してください。\n` +
+            `もし「接続できません」というエラー画面になったら、異常ではありません。そのアドレスバーのURLをそのまま下に貼ってください。`,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              callback_url: {
+                type: "string",
+                title: "エラー画面のURL（該当する場合のみ）",
+                description: "「接続できません」の画面が出た場合だけ、そのアドレスバーのURLを貼る。それ以外は空のままでよい。",
+              },
+            },
+            required: [],
+          },
+        });
+
+        if (elicited.action !== "accept") {
+          // 人が本当に断ったのか、クライアントが黙って自動拒否しただけかを区別できない。
+          // どちらでもauthUrlを失わない
+          return text({ ...fallback, elicitation: "拒否またはクライアントが未対応のため応答なし。上記URLと案内をそのままユーザーに伝えること。" });
+        }
+        const pasted = (elicited.content as { callback_url?: string } | undefined)?.callback_url?.trim();
+        if (pasted) {
+          return text(await completeAuthFromCallback(pasted));
+        }
+        // 空欄で送信 = ローカルの待ち受けが自動完了しているはず。少し待って確認する
+        for (let i = 0; i < 10; i++) {
+          const s = authStatus();
+          if (s.status === "done" || s.status === "error") return text(s);
+          await new Promise((res) => setTimeout(res, 500));
+        }
+        return text({ ...fallback, status: "waiting" });
+      } catch {
+        // elicitation自体が失敗した場合も認証フローは止めず、文章での案内に落とす
+        return text(fallback);
       }
     }
   );
@@ -74,6 +134,17 @@ export function createServer(): McpServer {
   server.tool("auth_status", "進行中の認証フローの状態を確認する（waiting/exchanging/done/error）。", {}, async () => {
     return text(authStatus());
   });
+
+  server.tool(
+    "auth_paste_redirect",
+    "ブラウザがこのマシンのlocalhostコールバックに戻れない環境（Slack経由の操作・クラウド実行等）向け。" +
+      "authenticateで開始した後、ブラウザで許可した後に表示された画面のURL（接続エラー画面でよい）をそのまま渡すと認証を完了する。" +
+      "code=...&state=... のクエリ文字列だけでもよい。",
+    { callback_url: z.string().describe("ブラウザが最終的に表示したURL、または code=...&state=... の文字列") },
+    async ({ callback_url }) => {
+      return text(await completeAuthFromCallback(callback_url));
+    }
+  );
 
   server.tool("list_offices", "保存済みトークン（事業者）の一覧とアクティブな接続先を表示する。", {}, async () => {
     return text(listTokens());
@@ -424,13 +495,14 @@ export function createServer(): McpServer {
 
   // ---- 情報 ----
 
-  server.tool("mf_full_info", "このサーバーの設定情報（要求スコープ・コールバックポート等）を表示する。", {}, async () => {
+  server.tool("mf_full_info", "このサーバーの設定情報（要求スコープ・コールバックポート・接続元クライアントのelicitation対応等）を表示する。", {}, async () => {
     return text({
       requestedScopes: scopes(),
       callbackPort: process.env.MF_FULL_CALLBACK_PORT
         ? Number(process.env.MF_FULL_CALLBACK_PORT)
         : "ephemeral (認証ごとに空きポートを自動割当)",
       tokensFile: "~/.mf-full-mcp/tokens.json",
+      clientCapabilities: server.server.getClientCapabilities() ?? null,
     });
   });
 
