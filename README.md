@@ -186,6 +186,50 @@ mfc_ca_currentOffice  いまどの事業者に繋がっているか確認する
 | `mfc_ca_deleteVouchers` | 仕訳と証憑の紐付けを解除する（証憑自体は孤立して残る） |
 | `mfc_ca_deleteJournals` | 仕訳を完全削除する |
 
+## エージェントから複数事業者を扱う（1事業者＝1プロセス）
+
+人が対話で使うときは、1プロセスの中で `use_office` を切り替えれば足ります。
+しかし **無人のエージェント（cron・複数の担当者と同時にやりとりする Slack ボット等）** が複数事業者に書き込む場合、
+1プロセスを共有すると次の事故が起きえます。
+
+- アクティブ事業者はプロセス内のメモリに1つだけ。A社の承認を処理している最中に B社向けの `use_office` が走ると、A社の仕訳が B社に入る
+- `~/.mf-full-mcp/tokens.json` は保存のたびにファイル全体を書き直す。複数プロセスが同じファイルを持つと、片方のリフレッシュ結果がもう片方に上書きされて消える
+- 認証の途中状態（PKCE の verifier と state）はプロセスのメモリにある。`authenticate` と `auth_paste_redirect` は同じプロセスで呼ばないと完了しない
+
+**推奨: 事業者ごとに別プロセスを立て、`HOME` と `MF_FULL_OFFICE` で固定する。**
+
+```yaml
+# 例（Hermes Agent の mcp_servers）。Claude Code の mcpServers でも同じ考え方
+mf-office-a:
+  command: node
+  args: ["/opt/data/mf-full-mcp/dist/index.js"]
+  env:
+    HOME: /opt/data/mf/office-a          # トークン置き場をこのプロセス専用にする（os.homedir() が HOME を見る）
+    MF_FULL_OFFICE: office-a        # 起動時の接続先を固定
+mf-office-b:
+  command: node
+  args: ["/opt/data/mf-full-mcp/dist/index.js"]
+  env:
+    HOME: /opt/data/mf/office-b
+    MF_FULL_OFFICE: office-b
+```
+
+こうすると各プロセスの tokens.json には自社のトークンしか無いので、誤って `use_office("office-b")` を呼んでも
+「保存済みトークンがありません」で落ちます。固定が仕組みになります。
+
+運用の決まり（エージェント側の指示に入れるもの）:
+
+1. 各事業者の処理は、その事業者専用のサーバー以外で行わない。`use_office` は使わない
+2. 書き込みの直前に `mfc_ca_currentOffice` を呼び、事業者名が処理対象と一致することを確認する。違えば書かない
+3. 1件ずつ完結させる: 登録 → 返ってきた `journal_id` に `postVouchers` で添付 → 次へ。承認が続けて来ても混ぜない
+4. `postTransactionJournalize` の前に、その明細の `journalizing_status` がまだ `none` か確認する（二重登録の防止）
+5. MF には「どのアプリが書いたか」の記録が無い（API 経由でも `entered_by` は `JOURNAL_TYPE_NORMAL`）。
+   エージェントの仕訳を後から見分けたいなら、`memo` に承認者と承認日を入れるか、`tags` に印を付ける。
+   承認の会話履歴（Slack 等）で十分に追える運用なら、どちらも省いてよい
+
+認証は事業者ごとに1回。ブラウザが localhost に戻れない環境では、認可後のエラー画面の URL を `auth_paste_redirect` に渡します
+（前述）。**必ずその事業者のサーバーで** `authenticate` から `auth_paste_redirect` まで行ってください。
+
 ## 環境変数
 
 | 変数 | 既定値 | 説明 |
