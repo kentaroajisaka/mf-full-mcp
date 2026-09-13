@@ -223,9 +223,9 @@ mf-office-b:
 2. 書き込みの直前に `mfc_ca_currentOffice` を呼び、事業者名が処理対象と一致することを確認する。違えば書かない
 3. 1件ずつ完結させる: 登録 → 返ってきた `journal_id` に `postVouchers` で添付 → 次へ。承認が続けて来ても混ぜない
 4. `postTransactionJournalize` の前に、その明細の `journalizing_status` がまだ `none` か確認する（二重登録の防止）
-5. MF には「どのアプリが書いたか」の記録が無い（API 経由でも `entered_by` は `JOURNAL_TYPE_NORMAL`）。
-   エージェントの仕訳を後から見分けたいなら、`memo` に承認者と承認日を入れるか、`tags` に印を付ける。
-   承認の会話履歴（Slack 等）で十分に追える運用なら、どちらも省いてよい
+5. API 経由で登録した仕訳は `entered_by` が `JOURNAL_TYPE_EXTERNAL` になる（画面からの入力は `JOURNAL_TYPE_NORMAL`）。
+   `getJournals` の結果を `entered_by` で絞れば、エージェントが登録した仕訳だけを後から抽出できる。
+   ただし「どのエージェント／どの承認で」までは分からない。それが必要なら `memo` や `tags` に残すか、承認の会話履歴（Slack 等）で追う
 
 認証は事業者ごとに1回。ブラウザが localhost に戻れない環境では、認可後のエラー画面の URL を `auth_paste_redirect` に渡します
 （前述）。**必ずその事業者のサーバーで** `authenticate` から `auth_paste_redirect` まで行ってください。
