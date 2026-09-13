@@ -226,6 +226,8 @@ mf-office-b:
 5. API 経由で登録した仕訳は `entered_by` が `JOURNAL_TYPE_EXTERNAL` になる（画面からの入力は `JOURNAL_TYPE_NORMAL`）。
    `getJournals` の結果を `entered_by` で絞れば、エージェントが登録した仕訳だけを後から抽出できる。
    ただし「どのエージェント／どの承認で」までは分からない。それが必要なら `memo` や `tags` に残すか、承認の会話履歴（Slack 等）で追う
+6. `POST /journals` で登録した仕訳は、`memo` を渡さなくても **MF が伝票メモに OAuth クライアント名を書き込む**（本サーバーなら `mf-full-mcp`、
+   `MF_FULL_CLIENT_NAME` で変えられる）。明細の仕訳化（`/transactions/{id}/journalize`）では入らない。消したいときは `putJournals` で全置換する
 
 認証は事業者ごとに1回。ブラウザが localhost に戻れない環境では、認可後のエラー画面の URL を `auth_paste_redirect` に渡します
 （前述）。**必ずその事業者のサーバーで** `authenticate` から `auth_paste_redirect` まで行ってください。
