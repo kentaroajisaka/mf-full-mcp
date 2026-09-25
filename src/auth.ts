@@ -331,7 +331,21 @@ export async function refreshAccessToken(token: OfficeToken): Promise<string> {
     body: body.toString(),
   });
   if (!res.ok) {
-    throw new Error(`トークン更新に失敗 (HTTP ${res.status})。authenticate し直してください。`);
+    // MF は失効時に {"error":"invalid_grant","error_description":"[A053305] ..."} を返す。
+    // 本文を捨てると「なぜ切れたか」が追えなくなるため、そのまま添える。
+    const detail = await res.text().catch(() => "");
+    let hint = "";
+    if (detail.includes("invalid_grant")) {
+      // refresh_token は使うたびに rotation し、旧値は即無効になる。
+      // 同一 client_id を複数端末で共有していると、片方の更新でもう片方が失効する。
+      hint =
+        " refresh_token が MF 側で無効化されています（別端末での利用、または更新の取りこぼし）。" +
+        " 端末ごとに MF_FULL_CLIENT_NAME を変えると取り合いを防げます。";
+    }
+    throw new Error(
+      `トークン更新に失敗 (HTTP ${res.status})${detail ? `: ${detail.slice(0, 300)}` : ""}。` +
+        `authenticate し直してください。${hint}`
+    );
   }
   const json = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
   if (!json.access_token) throw new Error("refresh レスポンスに access_token がありません");
