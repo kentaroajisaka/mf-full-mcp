@@ -238,7 +238,7 @@ mf-office-b:
 |---|---|---|
 | `MF_FULL_OFFICE` | なし | 起動時にセッションの接続先事業者を固定する |
 | `MF_FULL_CALLBACK_PORT` | 自動割当 | OAuthコールバックのポートを固定する |
-| `MF_FULL_SCOPES` | 会計16スコープ | 要求スコープを上書きする |
+| `MF_FULL_SCOPES` | 会計18スコープ | 要求スコープを上書きする |
 | `MF_FULL_CLIENT_NAME` | `mf-full-mcp` | 動的クライアント登録時のクライアント名 |
 
 ---

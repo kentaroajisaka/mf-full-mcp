@@ -10,7 +10,7 @@ const FIXED_CALLBACK_PORT = process.env.MF_FULL_CALLBACK_PORT ? Number(process.e
 const CLIENT_NAME = process.env.MF_FULL_CLIENT_NAME ?? "mf-full-mcp";
 
 /**
- * 既定はクラウド会計の全16スコープ。MF_FULL_SCOPES で上書き可能。
+ * 既定はクラウド会計の全18スコープ（2026-10-20 自動仕訳ルールの2つを追加）。MF_FULL_SCOPES で上書き可能。
  * 一部のスコープは MF 側の仕様変更により将来利用できなくなる可能性がある。
  */
 export const DEFAULT_SCOPES = [
@@ -19,6 +19,8 @@ export const DEFAULT_SCOPES = [
   "mfc/accounting/departments.read",
   "mfc/accounting/journal.read",
   "mfc/accounting/journal.write",
+  "mfc/accounting/journal_rule.read",
+  "mfc/accounting/journal_rule.write",
   "mfc/accounting/report.read",
   "mfc/accounting/taxes.read",
   "mfc/accounting/trade_partners.read",
