@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -45,8 +45,21 @@ function load(): Store {
 
 function save(store: Store): void {
   mkdirSync(DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
-  chmodSync(FILE, 0o600);
+  // 一時ファイルへ書いてから rename。書き込み途中で落ちても tokens.json が壊れない。
+  // 同一マシンで複数プロセスが同時に書いても、ファイルが半端な状態で残らない。
+  const tmp = `${FILE}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(store, null, 2), { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, FILE);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* noop */
+    }
+    throw e;
+  }
 }
 
 export function putToken(token: OfficeToken, makeActive = true): void {

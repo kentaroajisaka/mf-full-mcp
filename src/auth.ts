@@ -10,7 +10,7 @@ const FIXED_CALLBACK_PORT = process.env.MF_FULL_CALLBACK_PORT ? Number(process.e
 const CLIENT_NAME = process.env.MF_FULL_CLIENT_NAME ?? "mf-full-mcp";
 
 /**
- * 既定はクラウド会計の全16スコープ。MF_FULL_SCOPES で上書き可能。
+ * 既定はクラウド会計の全18スコープ（2026-10-20 自動仕訳ルールの2つを追加）。MF_FULL_SCOPES で上書き可能。
  * 一部のスコープは MF 側の仕様変更により将来利用できなくなる可能性がある。
  */
 export const DEFAULT_SCOPES = [
@@ -19,6 +19,8 @@ export const DEFAULT_SCOPES = [
   "mfc/accounting/departments.read",
   "mfc/accounting/journal.read",
   "mfc/accounting/journal.write",
+  "mfc/accounting/journal_rule.read",
+  "mfc/accounting/journal_rule.write",
   "mfc/accounting/report.read",
   "mfc/accounting/taxes.read",
   "mfc/accounting/trade_partners.read",
@@ -331,7 +333,21 @@ export async function refreshAccessToken(token: OfficeToken): Promise<string> {
     body: body.toString(),
   });
   if (!res.ok) {
-    throw new Error(`トークン更新に失敗 (HTTP ${res.status})。authenticate し直してください。`);
+    // MF は失効時に {"error":"invalid_grant","error_description":"[A053305] ..."} を返す。
+    // 本文を捨てると「なぜ切れたか」が追えなくなるため、そのまま添える。
+    const detail = await res.text().catch(() => "");
+    let hint = "";
+    if (detail.includes("invalid_grant")) {
+      // refresh_token は使うたびに rotation し、旧値は即無効になる。
+      // 同一 client_id を複数端末で共有していると、片方の更新でもう片方が失効する。
+      hint =
+        " refresh_token が MF 側で無効化されています（別端末での利用、または更新の取りこぼし）。" +
+        " 端末ごとに MF_FULL_CLIENT_NAME を変えると取り合いを防げます。";
+    }
+    throw new Error(
+      `トークン更新に失敗 (HTTP ${res.status})${detail ? `: ${detail.slice(0, 300)}` : ""}。` +
+        `authenticate し直してください。${hint}`
+    );
   }
   const json = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
   if (!json.access_token) throw new Error("refresh レスポンスに access_token がありません");

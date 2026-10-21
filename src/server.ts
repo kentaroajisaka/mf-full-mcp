@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import { api, encodePathId } from "./rest.js";
 import { authStatus, startAuth, scopes, completeAuthFromCallback } from "./auth.js";
 import { listTokens, removeToken, setActive } from "./tokens.js";
+import { registerJournalRuleTools } from "./journal-rules.js";
 
 function text(payload: unknown) {
   return {
@@ -36,7 +37,7 @@ export function createServer(): McpServer {
   ブラウザが最終的に表示したURL（接続エラー画面でよい）を auth_paste_redirect にそのまま渡す。
   code=...&state=... のクエリ文字列だけでも受け付ける
 - トークンは事業者ごとにローカル保存され、use_office で切替できる（複数法人同時保持可）
-- 既定スコープは mfc/accounting/* 全16個（voucher.write 込み）
+- 既定スコープは mfc/accounting/* 全18個（voucher.write・journal_rule.write 込み。10/20 以前に認証した事業者は自動仕訳ルールを使うとき authenticate し直す）
 - OAuthコールバックは空きポート自動割当（エフェメラル）。複数ウィンドウ/アプリで同時認証してもポート衝突しない（固定したい場合のみ MF_FULL_CALLBACK_PORT 環境変数）
 - **アクティブ事業者はプロセス(セッション)ごとに独立**。use_office の切替は他セッションに影響しない。データ取得前に mfc_ca_currentOffice で対象法人を確認すると確実（MF_FULL_OFFICE で起動時固定も可）
 
@@ -60,7 +61,7 @@ export function createServer(): McpServer {
       extra_scopes: z
         .string()
         .optional()
-        .describe("既定の会計16スコープに追加で要求するスコープ（スペース区切り。例: 'mfc/payroll/payroll.read mfc/payroll/bonus.read'）"),
+        .describe("既定の会計18スコープに追加で要求するスコープ（スペース区切り。例: 'mfc/payroll/payroll.read mfc/payroll/bonus.read'）"),
     },
     async ({ label, extra_scopes }) => {
       let r: { authUrl: string; scopes: string };
@@ -312,6 +313,10 @@ export function createServer(): McpServer {
       }
     }
   );
+
+  // ---- 公式互換: 自動仕訳ルール（2026-10-20 リリース） ----
+
+  registerJournalRuleTools(server, (m, p, o) => api(m, p, { query: o.query, body: o.body }), {});
 
   // ---- 公式互換: 帳票 ----
 
