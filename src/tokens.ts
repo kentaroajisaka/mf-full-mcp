@@ -78,6 +78,10 @@ export function updateToken(label: string, patch: Partial<OfficeToken>): void {
   save(store);
 }
 
+export function getToken(label: string): OfficeToken | null {
+  return load().offices[label] ?? null;
+}
+
 export function getActiveToken(): OfficeToken | null {
   const store = load();
   const label = sessionActive ?? store.active; // セッション内の指定を最優先、なければ共有デフォルト
