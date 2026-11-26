@@ -18,6 +18,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "test": "npm run build && node --test",
     "dev": "tsx src/index.ts",
     "prepare": "npm run build"
   },

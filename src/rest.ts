@@ -1,5 +1,5 @@
 import { refreshAccessToken } from "./auth.js";
-import { getActiveToken } from "./tokens.js";
+import { getActiveToken, getToken } from "./tokens.js";
 
 const API_BASE = "https://api-accounting.moneyforward.com/api/v3";
 
@@ -10,17 +10,6 @@ const API_BASE = "https://api-accounting.moneyforward.com/api/v3";
  */
 export function encodePathId(id: string): string {
   return encodeURIComponent(id);
-}
-
-async function bearer(): Promise<string> {
-  const token = getActiveToken();
-  if (!token) {
-    throw new Error("認証がありません。authenticate ツールで MF に認証してください。");
-  }
-  if (Date.now() > token.expiresAt - 60_000) {
-    return refreshAccessToken(token);
-  }
-  return token.accessToken;
 }
 
 /**
@@ -56,13 +45,22 @@ export async function api(
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
 
-  let res = await doFetch(await bearer());
+  // リクエスト中に use_office が呼ばれても、別事業者のトークンで再送しない。
+  const token = getActiveToken();
+  if (!token) {
+    throw new Error("認証がありません。authenticate ツールで MF に認証してください。");
+  }
+  const needsRefresh = Date.now() > token.expiresAt - 60_000;
+  const accessToken = needsRefresh ? await refreshAccessToken(token) : token.accessToken;
+  let res = await doFetch(accessToken);
 
-  // 401 は一度だけ refresh してリトライ
   if (res.status === 401) {
-    const token = getActiveToken();
-    if (token) {
-      const refreshed = await refreshAccessToken(token);
+    const current = getToken(token.label);
+    if (current) {
+      // 別のリクエストが先に更新したトークンがあれば、その値を使う。
+      const refreshed = current.accessToken === accessToken
+        ? await refreshAccessToken(current)
+        : current.accessToken;
       res = await doFetch(refreshed);
     }
   }

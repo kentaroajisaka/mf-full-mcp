@@ -43,7 +43,7 @@ export function createServer(): McpServer {
 
 ## 注意
 - ID は各 get 系ツールが返した URL エンコード済みの値をそのまま渡すこと
-- 仕訳登録・更新・削除・証憑添付/解除・明細仕訳化は帳簿を書き換える。実行前にユーザーの承認を得ること
+- 仕訳登録・更新・削除・証憑添付/解除・明細仕訳化・明細の対象外設定/解除は帳簿を書き換える。実行前にユーザーの承認を得ること
 - putJournals は全置換 API。部分更新はできない
 - invoice_kind は書き込み3値(QUALIFIED/NOT_TARGET/UNQUALIFIED_80)が公式仕様。それ以外の値は検証実験用`,
     }
@@ -228,7 +228,7 @@ export function createServer(): McpServer {
     }
   );
 
-  server.tool("mfc_ca_getConnectedAccounts", "連携サービス（自動連携・手動管理とも）を取得します。", {}, async () => {
+  server.tool("mfc_ca_getConnectedAccounts", "連携サービス（自動連携・手動管理とも）を取得します。同期完了時刻 last_synced_time、明細取得状態 retrieval_status、サービス分類 service_category_code を含むAPI応答をそのまま返します。", {}, async () => {
     try {
       return text(await api("GET", "/connected_accounts"));
     } catch (e) {
@@ -372,10 +372,11 @@ export function createServer(): McpServer {
 
   server.tool(
     "mfc_ca_getTransactions",
-    "連携サービスで収集された明細一覧を取得します（自動連携・手動とも）。",
+    "連携サービスで収集された明細一覧を取得します（自動連携・手動とも）。ids（1〜50件）か、start_date と end_date の組を指定します。",
     {
-      start_date: z.string().describe("YYYY-MM-DD。end_dateとの差366日以内"),
-      end_date: z.string(),
+      start_date: z.string().optional().describe("YYYY-MM-DD。end_dateとの差366日以内"),
+      end_date: z.string().optional().describe("YYYY-MM-DD"),
+      ids: z.array(z.string().min(1)).min(1).max(50).optional().describe("明細ID。APIが返した値をそのまま使用し、日付と併用しない"),
       connected_account_id: z.string().optional(),
       connected_sub_account_id: z.string().optional(),
       journalizing_statuses: z
@@ -388,11 +389,36 @@ export function createServer(): McpServer {
       content_match_type: z.enum(["exact", "partial", "forward", "backward"]).optional(),
       order: z.enum(["asc", "desc"]).optional(),
       page: z.number().int().optional(),
-      per_page: z.number().int().optional().describe("10〜1000"),
+      per_page: z.number().int().optional().describe("10〜500"),
     },
     async (args) => {
       try {
+        const { ids, start_date, end_date } = args;
+        if (ids !== undefined ? start_date !== undefined || end_date !== undefined : !start_date || !end_date) {
+          throw new Error("idsのみ、またはstart_dateとend_dateの両方を指定してください。");
+        }
         return text(await api("GET", "/transactions", { query: args }));
+      } catch (e) {
+        return errText(e);
+      }
+    }
+  );
+
+  server.tool(
+    "mfc_ca_putTransactionStatuses",
+    "現在のOAuth接続先で明細を一括で対象外（excluded）または未仕訳（none）にします。" +
+      "mfc_ca_currentOffice と mfc_ca_getTransactions で事業者・明細ID・現在の状態を確認し、変更後の状態を提示して実行前にユーザーの承認を得てください。" +
+      "紐付く仕訳がある明細は更新できません。このツールは仕訳を削除しません。" +
+      "実行後は同じ事業者で mfc_ca_getTransactions の ids を使い、50件ずつ全件の状態を確認してください。結果不明時は再送前に確認してください。",
+    {
+      to: z.enum(["excluded", "none"]),
+      transaction_ids: z.array(z.string().min(1)).min(1).max(1000)
+        .refine((ids) => new Set(ids).size === ids.length, "明細IDの重複は指定できません。")
+        .describe("明細IDを1〜1000件。APIが返した値をそのまま使用"),
+    },
+    async ({ to, transaction_ids }) => {
+      try {
+        return text(await api("PUT", "/transactions/statuses", { query: { to }, body: { transaction_ids } }));
       } catch (e) {
         return errText(e);
       }
